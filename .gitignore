@@ -1,0 +1,38 @@
+# ─── User configuration (contains local paths and usernames — never commit) ────
+config.yml
+
+# ─── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Editor and IDE files ─────────────────────────────────────────────────────
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# ─── OS-generated files ───────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─── Debug and log files ──────────────────────────────────────────────────────
+gphoto2-debug.log
+*.log
+
+# ─── Temporary / build artifacts ──────────────────────────────────────────────
+*.tmp
+*.bak
+*.orig
+/tmp/
+
+# ─── State files (written at runtime to the photo destination) ────────────────
+.last_sync_count

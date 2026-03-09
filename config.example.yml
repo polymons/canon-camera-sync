@@ -1,0 +1,42 @@
+# Canon Camera Auto-Sync — Configuration
+# Copy this file to config.yml and edit the values for your setup.
+
+# Absolute path where downloaded photos will be saved.
+# Photos are organized into YYYY/MM/ subfolders by capture date.
+dest_base: /path/to/your/photo/destination
+
+# Linux user and group that will own the downloaded files.
+# The sync script runs as root (required for USB access), then
+# chowns all files to this user/group after download.
+owner_user: your_username
+owner_group: your_username
+
+# USB vendor ID from lsusb.
+# Canon = 04a9 (same for all Canon cameras)
+# Other brands: Nikon = 04b0, Sony = 054c, Fujifilm = 04cb
+camera_vendor_id: "04a9"
+
+# USB product ID from lsusb — specific to your camera model.
+# To find yours: plug in camera, run: lsusb | grep -i canon
+# Example output: Bus 001 Device 015: ID 04a9:32f9 Canon, Inc.
+#                                           ^^^^
+# Common Canon product IDs:
+#   32f9 = Canon EOS M50 Mark II
+#   32d2 = Canon EOS R
+#   32da = Canon EOS RP
+#   32e2 = Canon EOS R5
+#   32e4 = Canon EOS R6
+camera_product_id: "32f9"
+
+# Camera brand name used by gphoto2 --auto-detect to verify
+# the camera is connected. Case-insensitive.
+camera_detect_name: canon
+
+# Directory where install.sh will copy the sync script and config.
+# This is where the script runs from after installation.
+script_dir: /opt/canon-camera-sync
+
+# Seconds to wait after USB connect before syncing.
+# Gives the camera time to fully initialize over USB.
+# Increase if you get detection failures on slow machines.
+pre_delay_seconds: 5
