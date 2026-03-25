@@ -17,3 +17,15 @@ ExecStartPre=/bin/sleep 5
 ExecStart=/opt/canon-camera-sync/camera-sync.sh
 StandardOutput=journal
 StandardError=journal
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=/media/ecniv/FILES/CANON_M50

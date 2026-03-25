@@ -34,6 +34,18 @@ if [[ "$DEST_BASE" == "/path/to/your/photo/destination" || -z "$DEST_BASE" ]]; t
     echo "ERROR: 'dest_base' in config.yml is not configured."
     exit 1
 fi
+if [[ "$DEST_BASE" != /* ]]; then
+    echo "ERROR: dest_base must be an absolute path."
+    exit 1
+fi
+if ! id -u "$OWNER_USER" &>/dev/null; then
+    echo "ERROR: owner_user '$OWNER_USER' does not exist on this system."
+    exit 1
+fi
+if ! getent group "$OWNER_GROUP" &>/dev/null; then
+    echo "ERROR: owner_group '$OWNER_GROUP' does not exist on this system."
+    exit 1
+fi
 
 # Ensure destination base exists
 mkdir -p "$DEST_BASE"
