@@ -36,3 +36,13 @@ gphoto2-debug.log
 
 # ─── State files (written at runtime to the photo destination) ────────────────
 .last_sync_count
+
+# ─── Local assistant / tooling scaffolding ────────────────────────────────────
+# graphify knowledge-graph artefacts and Claude Code config are per-machine
+# tooling: regenerable, machine-specific, and unrelated to the sync script.
+# They stay on disk and keep working locally — they are just not shared.
+.claude/
+CLAUDE.md
+graphify-out/
+.graphifyignore
+.gitattributes
