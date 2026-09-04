@@ -128,6 +128,72 @@ if grep -q '@[A-Z_]*@' "$SERVICE_FILE"; then
 fi
 echo "  [OK] systemd service installed to $SERVICE_FILE"
 
+# ─── Generate and install the Wi-Fi event path ─────────────────────────────────
+# Three more units, all optional in the sense that the USB path works without
+# them — but without them there IS no Wi-Fi path, and "the sync runs when the
+# camera comes online" is only half true. They were previously left to a set of
+# install commands in the README, which meant a fresh install silently had no
+# wireless trigger at all.
+#
+# canon-camera-watch.service is the event source: it listens for the camera's
+# SSDP announcement and starts the sync the moment the camera joins the network.
+# The timer is the backstop for an announcement lost to multicast.
+#
+# RequiresMountsFor needs the mount point holding dest_base, not dest_base
+# itself, so systemd waits for the photo drive rather than a directory on it.
+#
+# dest_base is not created until further down, and on a fresh install it does
+# not exist yet — findmnt cannot resolve a path that is not there. Walk up to
+# the deepest ancestor that does exist and ask about that instead; on an
+# already-mounted drive that is the drive, and before the first install it
+# degrades to / rather than failing.
+MOUNT_PROBE="$DEST_BASE"
+while [[ -n "$MOUNT_PROBE" && ! -d "$MOUNT_PROBE" ]]; do
+    MOUNT_PROBE="${MOUNT_PROBE%/*}"
+done
+[[ -n "$MOUNT_PROBE" ]] || MOUNT_PROBE=/
+DEST_MOUNT="$(findmnt -no TARGET --target "$MOUNT_PROBE" 2>/dev/null || echo /)"
+if [[ "$DEST_MOUNT" == "/" ]]; then
+    echo "  [!!] dest_base is not on a separate mount; the Wi-Fi unit will not"
+    echo "       wait for a drive before running. Re-run install.sh once the"
+    echo "       photo drive is mounted if that is not what you want."
+fi
+
+install_unit() {
+    local template="$SCRIPT_DIR/$1" target="/etc/systemd/system/$2"
+    if [[ ! -f "$template" ]]; then
+        echo "ERROR: unit template not found at $template"
+        exit 1
+    fi
+    sed -e "s|@SCRIPT_DIR@|$SCRIPT_INSTALL_DIR|g" \
+        -e "s|@DEST_BASE@|$DEST_BASE|g" \
+        -e "s|@DEST_MOUNT@|$DEST_MOUNT|g" \
+        -e "s|@METRICS_DIR@|$METRICS_DIR|g" \
+        -e "s|@PRE_DELAY@|$PRE_DELAY|g" \
+        "$template" > "$target"
+    if grep -q '@[A-Z_]*@' "$target"; then
+        echo "ERROR: unsubstituted markers left in $target:"
+        grep -o '@[A-Z_]*@' "$target" | sort -u
+        exit 1
+    fi
+    echo "  [OK] $2 installed"
+}
+
+CAMERA_MAC="$(yml_get camera_mac)"
+if [[ -n "$CAMERA_MAC" ]]; then
+    install -m755 "$SCRIPT_DIR/canon-camera-watch.py" "$SCRIPT_INSTALL_DIR/"
+    install_unit camera-sync-wifi.service   canon-camera-sync-wifi.service
+    install_unit camera-sync-wifi.timer     canon-camera-sync-wifi.timer
+    install_unit canon-camera-watch.service canon-camera-watch.service
+    WIFI_UNITS=1
+else
+    # No MAC means the Wi-Fi transport is disabled in camera-sync.sh anyway, so
+    # installing units that can only ever report "no camera_mac set" would be
+    # noise. Set camera_mac and re-run this script to turn the path on.
+    echo "  [--] Wi-Fi units skipped: camera_mac is not set in config.yml"
+    WIFI_UNITS=0
+fi
+
 # ─── Create the metrics directory ──────────────────────────────────────────────
 # node_exporter's textfile collector reads *.prom from here and Prometheus
 # scrapes them, which is what feeds the Grafana dashboard. 0755 is required:
@@ -156,11 +222,31 @@ mkdir -p "$DEST_BASE"
 chown "$OWNER_USER:$OWNER_GROUP" "$DEST_BASE"
 echo "  [OK] Destination directory created: $DEST_BASE"
 
+# Bookkeeping for the geotag review: what the card looked like the last time
+# each file was examined, plus the list of files the camera can no longer help
+# with. Dot-prefixed so Immich's external-library crawler ignores it, and inside
+# dest_base because the unit's ReadWritePaths= grants write access to nothing
+# else. Created here so a first run does not have to.
+mkdir -p "$DEST_BASE/.geo"
+chown -R "$OWNER_USER:$OWNER_GROUP" "$DEST_BASE/.geo"
+echo "  [OK] Geotag review state directory ready at $DEST_BASE/.geo"
+
 # ─── Reload system daemons ─────────────────────────────────────────────────────
 
 udevadm control --reload-rules
 systemctl daemon-reload
 echo "  [OK] udev rules and systemd reloaded"
+
+if (( WIFI_UNITS )); then
+    # enable --now on both: the watcher must be listening before the camera is
+    # next switched on, and the timer's OnBootSec only fires at boot.
+    systemctl enable --now canon-camera-watch.service >/dev/null 2>&1 \
+        && echo "  [OK] canon-camera-watch.service enabled (SSDP trigger)" \
+        || echo "  [!!] could not enable canon-camera-watch.service"
+    systemctl enable --now canon-camera-sync-wifi.timer >/dev/null 2>&1 \
+        && echo "  [OK] canon-camera-sync-wifi.timer enabled (30-minute backstop)" \
+        || echo "  [!!] could not enable canon-camera-sync-wifi.timer"
+fi
 
 echo ""
 echo "Installation complete!"

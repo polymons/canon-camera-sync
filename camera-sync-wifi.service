@@ -1,8 +1,8 @@
 # Canon Camera Auto-Sync — Wi-Fi (CCAPI) variant.
 #
-# Reference template. Unlike the USB unit there is no udev trigger: a camera on
-# the network raises no kernel event, so this is driven by camera-sync-wifi.timer
-# (or run by hand).
+# Installed by install.sh, which fills in the placeholders from config.yml. Unlike the USB unit there is no udev trigger: a camera on the
+# network raises no kernel event, so this is driven by canon-camera-watch.service
+# when the camera announces itself, and by camera-sync-wifi.timer as a backstop.
 #
 # Deliberately a SEPARATE unit name from canon-camera-sync.service so a stuck USB
 # run can never block the Wi-Fi path, or vice versa.
@@ -15,11 +15,11 @@ After=network-online.target
 Wants=network-online.target
 # Do not fire with the photo drive unmounted: the script would otherwise
 # mkdir -p a fake dest_base on the root filesystem and "sync" into it.
-RequiresMountsFor=/media/ecniv/FILES
+RequiresMountsFor=@DEST_MOUNT@
 
 [Service]
 Type=oneshot
-ExecStart=/opt/canon-camera-sync/camera-sync.sh
+ExecStart=@SCRIPT_DIR@/camera-sync.sh
 # Tells the script that "no camera" is a normal answer for a polling trigger,
 # so an idle tick exits 0 instead of logging a failed unit every few minutes.
 Environment=CAMERA_SYNC_POLL=1

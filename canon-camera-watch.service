@@ -5,11 +5,8 @@
 # instead of a timer polling for it. canon-camera-sync-wifi.timer stays enabled
 # as a slow safety net for a missed announcement (multicast is lossy).
 #
-# Install:
-#   sudo install -m755 canon-camera-watch.py /opt/canon-camera-sync/
-#   sudo install -m644 canon-camera-watch.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now canon-camera-watch.service
+# Installed and enabled by install.sh, which fills in the placeholders from
+# config.yml.
 
 [Unit]
 Description=Canon Camera SSDP Watch (triggers sync when the camera appears)
@@ -18,7 +15,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/canon-camera-sync/canon-camera-watch.py
+ExecStart=@SCRIPT_DIR@/canon-camera-watch.py
 Restart=always
 RestartSec=10s
 StandardOutput=journal

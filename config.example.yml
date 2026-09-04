@@ -73,3 +73,74 @@ ccapi_port: 8080
 # open on your LAN and these stay empty.
 ccapi_user: ""
 ccapi_password: ""
+
+# ─── Geotag review ────────────────────────────────────────────────────────────
+# The camera has no GPS receiver: it gets location from the phone over Bluetooth,
+# and that link is often down when the shutter fires. The coordinates can be
+# merged onto the card afterwards — sometimes long after this archive already
+# holds the file. A normal sync never notices, because it only ever looks at
+# files that are *missing* locally.
+#
+# The geotag review closes that gap. It runs at the end of an ordinary sync, so
+# every event that already starts one — a cable going in, the camera announcing
+# itself on Wi-Fi, the safety-net timer — also asks whether the card has since
+# gained coordinates for files already in the archive.
+#
+#   auto   run when the ledger says there is something worth looking at
+#   off    never run (the manual CAMERA_SYNC_REFRESH path still works)
+#   force  run on every event, ignoring geo_min_interval_seconds
+#
+# See the "Geotag review" section of README.md before changing anything below.
+geo_review: auto
+
+# How much one event may spend on the expensive tier — actually reading card
+# files. Split by transport because the two events mean different things: a
+# cable being plugged in is deliberate and runs at ~10 MB/s, while a Wi-Fi
+# announcement is incidental and the camera may be switched off again in a
+# minute. Whichever limit is reached first stops the pass; the next event
+# resumes from where it left off.
+geo_budget_files_usb: 150
+geo_budget_seconds_usb: 900
+geo_budget_files_ccapi: 400
+geo_budget_seconds_ccapi: 300
+
+# Used only when the camera turns out not to serve HTTP Range. With Range a
+# coordinate check costs 256 KiB; without it, a whole file — so the budget has
+# to fall by two orders of magnitude to cost the same.
+geo_budget_files_ccapi_full: 20
+
+# Whether this camera ever adds coordinates to a card file after capture is an
+# empirical question, and most stills in a typical archive have an empty GPS
+# block — so one miss proves nothing, it is just the base rate. Until something
+# is actually found the review spends only geo_probe_files checks per event;
+# after geo_giveup checks with no result at all it writes the premise off and
+# stops spending. Both counters live in the ledger and survive between events.
+geo_probe_files: 5
+geo_giveup: 25
+
+# How a written-off premise comes back, both cheap. geo_rearm_probe_files is a
+# rotation of metadata-only probes over files already settled; over USB, several
+# whole-KB sizes changing at once in the listing costs nothing at all and means
+# something rewrote the files. `CAMERA_SYNC_GEO=rearm` forces it by hand.
+geo_rearm_probe_files: 25
+geo_rearm_kb_threshold: 3
+
+# One power-on produces a burst of SSDP announcements and the camera re-announces
+# every ~15 minutes, so without this a settled archive would be re-walked several
+# times an hour to reach the same conclusion. Only applies when the sync found no
+# new photos: a camera that has just handed over new files is always worth asking
+# about the old ones.
+geo_min_interval_seconds: 3600
+
+# Firmware updates happen, so a camera that refused partial downloads once is
+# asked again this often.
+geo_range_recheck_days: 30
+
+# Safety valve on the ledger. Over this many rows it is rebuilt, which costs
+# budget but never data.
+geo_ledger_max_rows: 20000
+
+# Exact card-side sizes over USB come from one batched `gphoto2 --show-info`.
+# Set to 0 if that output cannot be parsed on your firmware; the review then
+# falls back to downloading, which is correct but much more expensive.
+geo_show_info_batch: 1

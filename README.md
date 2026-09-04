@@ -202,15 +202,227 @@ Once installed, simply **plug in your camera via USB**. The sync starts automati
 sudo /opt/canon-camera-sync/camera-sync.sh
 ```
 
-### Force full re-sync
+### Force a re-scan of the card
 
-Delete the state file to re-download everything:
+A run normally starts by asking whether the *card* has changed since last time,
+and stops there if it has not. That is the wrong question after the archive
+loses files: delete a month locally and the card still reports the same count
+and the same last filename, so the run exits believing there is nothing to do
+and those photos are never fetched again.
+
+Making that safe automatically would mean walking the whole archive on every
+poll — the exact cost that check exists to avoid, on a drive that may be spun
+down. So it is an explicit request instead:
+
+```bash
+sudo env CAMERA_SYNC_RESCAN=1 /opt/canon-camera-sync/camera-sync.sh
+```
+
+Run it after deleting or restoring anything by hand. It compares the card
+against what is actually on disk and fetches back whatever is missing.
+
+It does **not** re-download files that are still there: the second check matches
+on filename, so a rescan with nothing missing prints `All N files already exist
+locally` and transfers nothing. To re-fetch files that *are* present, see
+Refresh mode below.
+
+Deleting the state file has the same effect and is still worth knowing about, as
+it also resets what the next run considers "already synced":
 
 ```bash
 # Use the dest_base path from your config.yml
 rm /your/photo/destination/.last_sync_count
-sudo /opt/canon-camera-sync/camera-sync.sh
 ```
+
+### Refresh mode — re-fetch files to pick up coordinates
+
+This body has no GPS receiver. It records coordinates only while the phone is
+feeding them over Bluetooth, so shots taken with that link down get a GPS block
+containing no latitude or longitude, and no amount of normal syncing will ever
+improve them — they are already in the archive, so the filename check skips them.
+
+Refresh mode re-fetches such files and replaces a local copy **only** when the
+card copy genuinely has coordinates it lacks:
+
+```bash
+# 1. Go/no-go. Fetches ONE file, reports what each copy has, changes nothing.
+sudo env CAMERA_SYNC_REFRESH=probe CAMERA_SYNC_REFRESH_SCOPE=2026/09 \
+     /opt/canon-camera-sync/camera-sync.sh
+
+# 2. Only if the probe shows the card is better:
+sudo env CAMERA_SYNC_REFRESH=run CAMERA_SYNC_REFRESH_SCOPE=2026/09 \
+     /opt/canon-camera-sync/camera-sync.sh
+```
+
+`CAMERA_SYNC_REFRESH_SCOPE` is a path prefix relative to `dest_base`, so
+`2026/09` is a month and `2026/09/IMG_7037` is one shot and its raw. It is
+required for `run` — unscoped, every file in the archive without coordinates
+would be a candidate.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CAMERA_SYNC_REFRESH` | unset | `probe` (one file, report only) or `run` |
+| `CAMERA_SYNC_REFRESH_SCOPE` | — | path prefix; required for `run` |
+| `CAMERA_SYNC_REFRESH_GIVEUP` | `10` | stop after this many card copies in a row turn out to have no coordinates either and nothing has been promoted. `0` disables |
+
+What it will and will not do:
+
+- **Replaces only on a gain.** The card copy must have latitude and longitude
+  and the local copy must have none. A copy that is no better is deleted from
+  quarantine and the local file is not touched.
+- **Never deletes your files.** Every replaced original is hard-linked into
+  `.refresh/backup/<timestamp>/` before the new file is moved into place, so the
+  live path never stops existing even if the run is killed mid-file.
+- **Refuses a shrinking file.** Gaining a GPS block can only make a file bigger.
+- **Ignores dot-directories**, so a shot culled into `.deleted/` is never
+  resurrected, and previous backups are never re-processed.
+- **Skips videos** and anything that is not a JPG or CR3.
+- **Fetches nothing new.** Files on the card that are not in the archive are
+  reported and left for a normal sync.
+- **Writes neither the state file nor the metrics**, for the same reason
+  `DRY_RUN` does not: it collects no new photos, and stamping "up to date" for a
+  listing it never worked through would make the next run skip real files.
+- **Resumes for free.** A replaced file now has coordinates, so it is no longer
+  a candidate; re-run the same command to continue.
+
+Downloads land in `.refresh/incoming/` and are cleared at the start of each run.
+Both directories sit inside `dest_base` on purpose: dot-prefixed so Immich's
+crawler ignores them, and inside the tree because the systemd unit's
+`ReadWritePaths=` grants write access to nothing else.
+
+Promoted files get their mtime bumped. Immich decides whether to re-read EXIF by
+comparing mtime, and external assets are hashed by path rather than content, so
+a file arriving with the camera's original timestamp would keep its stale
+metadata for ever. After a refresh, an ordinary library scan is enough.
+
+### Geotag review — automatic, event-driven backfill
+
+Refresh mode above is the manual, scoped version of this. The **geotag review**
+is the automatic one, and it is what makes late-arriving coordinates a solved
+problem rather than something to remember to go and fix.
+
+The camera gets location from the phone over Bluetooth. That link is often down
+when the shutter fires, and the coordinates can be merged onto the card
+afterwards — sometimes long after the archive already holds a copy of the file.
+Nothing in a normal sync notices, because the "is this file missing?" test is
+basename-only: a file that is already here is never looked at again, whatever
+happened to the card copy since.
+
+The review runs at the end of an ordinary sync, so **every event that already
+starts one also asks this question** — the udev rule when a cable goes in,
+`canon-camera-watch.service` when the camera announces itself over Wi-Fi, and
+the 30-minute timer as a backstop. Nothing new needs to be scheduled.
+
+#### What makes it affordable
+
+A ledger at `dest_base/.geo/ledger.tsv` records what each file looked like, both
+locally and on the card, the last time it was examined. A file whose local copy
+is unchanged and whose card-side size and timestamp are unchanged cannot have
+gained anything, and is skipped for nothing. In the steady state an event costs
+a listing comparison and no traffic at all.
+
+Four tiers, cheapest first, and nothing is ever ruled out on a weak signal:
+
+| Tier | Cost | What it does |
+|---|---|---|
+| the listing | free | which archived files are still on the card |
+| whole-KB sizes | free, **USB only** | a *changed* KB figure is definite evidence; an unchanged one proves nothing (see below) |
+| exact size and mtime | ~200 B per file | `?kind=info` over Wi-Fi, one batched `--show-info` over USB. The real change detector |
+| the GPS answer | 256 KiB, or a whole file | only for files the tier above could not settle |
+
+The 256 KiB figure is exact, not a heuristic: `has_gps` reads exactly that many
+bytes and cannot see past them, so an `HTTP Range` request the same length gives
+the same verdict as the complete file. Where the camera serves Range, settling
+this archive's whole backlog costs a few hundred megabytes instead of tens of
+gigabytes. Where it does not, the review says so in the log and drops to a much
+smaller per-event budget.
+
+> **The USB whole-KB signal is statistical, not per-file.** A GPS merge adds
+> only ~100–200 bytes, which crosses a whole-KB boundary about one time in six.
+> So it is only ever used to move a file *into* the queue, never to rule one
+> out — and across a card it is a reliable hint that something rewrote the files.
+
+#### It does not assume the camera can help
+
+Whether this body writes coordinates onto a card file after capture is an
+empirical question, and on this archive 93% of stills have a GPS block with no
+latitude or longitude in it. A single miss therefore proves nothing — it is the
+base rate. So the ledger tracks a **premise**:
+
+- `unknown` — spend at most `geo_probe_files` (5) checks per event, no more;
+- `proven` — something has actually been found; the full budget unlocks;
+- `disproven` — `geo_giveup` (25) checks have found nothing at all. Stop. Events
+  after this cost only a metadata probe, which is nearly free.
+
+A written-off premise is not a dead end. It reopens the moment there is evidence:
+a card file whose size or timestamp has changed, several whole-KB sizes moving at
+once over USB, or `CAMERA_SYNC_GEO=rearm` by hand. So the worst case for a camera
+that never re-tags anything is a handful of wasted checks, once — and if that
+ever changes, the next event notices.
+
+#### What it will and will not do
+
+- **Promotion goes through the same `refresh_commit`** as manual refresh mode,
+  with the same guarantees: replaces only on a genuine coordinate gain, refuses
+  a card copy smaller than the local file, and hard-links the original into
+  `.refresh/backup/<timestamp>/` before anything overwrites it.
+- **A 256 KiB sniff is never installed.** It answers the question; the file that
+  replaces a photo is always fetched in full.
+- **It cannot fail a sync.** It runs after the state file is written and after
+  the run is already recorded as a success, and every error path inside it is
+  non-fatal. A run that aborted collecting new photos never reaches it at all.
+- **Files the camera no longer holds are reported, not attempted.** They are
+  counted, and listed one path per line in `dest_base/.geo/unreachable.txt` at
+  the end of each completed pass. Only a recorded GPS track can fix those, and
+  that file is the input list for doing it.
+- **Budgets bound every event** and the ledger is the resume point, so a large
+  backlog drains over several camera-online events instead of one long run.
+
+#### Configuration
+
+Every key is optional; the defaults below apply if it is absent. Each also has a
+`CAMERA_SYNC_GEO_*` environment override.
+
+```yaml
+geo_review: auto              # auto | off | force
+geo_budget_files_usb: 150     # a cable connect is deliberate, so it gets more
+geo_budget_files_ccapi: 400   # with Range: 400 x 256 KiB = 100 MB per event
+geo_budget_files_ccapi_full: 20   # without Range, every check is a whole file
+geo_budget_seconds_usb: 900
+geo_budget_seconds_ccapi: 300
+geo_probe_files: 5            # checks per event while the premise is unknown
+geo_giveup: 25                # checks with no result before writing it off
+geo_rearm_probe_files: 25     # metadata probes per event while written off
+geo_rearm_kb_threshold: 3     # changed whole-KB sizes that reopen it (USB)
+geo_min_interval_seconds: 3600
+geo_range_recheck_days: 30
+geo_ledger_max_rows: 20000
+geo_show_info_batch: 1        # 0 if --show-info misbehaves on your firmware
+```
+
+`CAMERA_SYNC_GEO` overrides `geo_review` and adds three operator verbs:
+
+```bash
+# What would this event look at, and why? Fetches nothing, writes nothing.
+sudo env CAMERA_SYNC_GEO=plan /opt/canon-camera-sync/camera-sync.sh
+
+# Where does the archive stand? Touches neither the camera nor the archive.
+sudo env CAMERA_SYNC_GEO=status /opt/canon-camera-sync/camera-sync.sh
+
+# Reopen a written-off premise and make every settled file a candidate again.
+sudo env CAMERA_SYNC_GEO=rearm /opt/canon-camera-sync/camera-sync.sh
+```
+
+To start completely over, delete `dest_base/.geo/ledger.tsv`. Rebuilding it costs
+budget, never data.
+
+#### Monitoring
+
+The review exports `canon_sync_geo_*` metrics alongside the sync's own, and the
+Grafana dashboard carries a **Geotag review** row: the premise, whether partial
+downloads are available, a coverage donut over the whole archive, what each
+event's review did, and the bytes it pulled per hour — which is the panel to
+watch if you suspect it is being expensive.
 
 ### Check logs
 
@@ -392,7 +604,8 @@ sudo CANON_SYNC_METRICS_DIR=/tmp/metrics ./camera-sync.sh   # write there instea
 sudo CANON_SYNC_METRICS_DIR=/nonexistent ./camera-sync.sh   # no metrics at all
 ```
 
-`DRY_RUN=1` never writes metrics, so a dry run cannot disturb the numbers.
+`DRY_RUN=1` and `CAMERA_SYNC_REFRESH` never write metrics, so neither a dry
+run nor a refresh can disturb the numbers.
 
 What is exported: whether a run is in progress and which phase it is in, whether
 the camera was reachable and over which transport, files queued/downloaded/

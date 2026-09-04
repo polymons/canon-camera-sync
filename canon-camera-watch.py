@@ -84,6 +84,12 @@ def open_listener(local_ip):
     s.bind(("", SSDP_PORT))
     mreq = struct.pack("4s4s", socket.inet_aton(SSDP_GROUP), socket.inet_aton(local_ip))
     s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    # Without a timeout, recvfrom blocks for ever. That matters because it is
+    # also how this process would fail: a socket wedged by an interface going
+    # away never returns, the process never exits, and Restart=always therefore
+    # never gets the chance to fix it. Waking every 30s costs nothing and turns
+    # a silent hang into a loop that can notice.
+    s.settimeout(30)
     return s
 
 
@@ -122,6 +128,11 @@ def main():
     while True:
         try:
             data, addr = sock.recvfrom(4096)
+        except socket.timeout:
+            # Nothing announced itself in the last 30s, which is the normal
+            # state of affairs. Must be caught before OSError below: on modern
+            # Python socket.timeout is a subclass of it.
+            continue
         except OSError as exc:
             log(f"ERROR: receive failed: {exc}")
             return 1
