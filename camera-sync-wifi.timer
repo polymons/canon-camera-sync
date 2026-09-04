@@ -1,0 +1,26 @@
+# Safety net for the camera appearing on the network, since udev cannot see it.
+#
+# The primary trigger is canon-camera-watch.service, which reacts to the
+# camera's own SSDP announcement within seconds of it being switched on. This
+# timer exists only to catch an announcement that was missed — multicast is
+# lossy, and the watcher could be restarting at the wrong moment — so it runs
+# at a low duty cycle rather than the tight poll it used to be.
+#
+# OnUnitInactiveSec re-arms only once the service goes inactive, so ticks can
+# never stack on top of a transfer already in progress.
+#
+# Ship disabled; enable only after one clean full run:
+#   sudo systemctl enable --now canon-camera-sync-wifi.timer
+
+[Unit]
+Description=Poll for the Canon camera on Wi-Fi
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30min
+AccuracySec=30s
+Persistent=false
+Unit=canon-camera-sync-wifi.service
+
+[Install]
+WantedBy=timers.target

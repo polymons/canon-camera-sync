@@ -40,3 +40,36 @@ script_dir: /opt/canon-camera-sync
 # Gives the camera time to fully initialize over USB.
 # Increase if you get detection failures on slow machines.
 pre_delay_seconds: 5
+
+# ─── Transport ────────────────────────────────────────────────────────────────
+# How to reach the camera:
+#   auto  — USB when the camera is plugged in, otherwise Wi-Fi (default)
+#   usb   — USB only, never fall back to the network
+#   ccapi — network only, even if the camera is also plugged in
+#
+# Omit this key and you get "auto". Nothing needs changing when you switch
+# between cable and Wi-Fi: plug in and USB wins, unplug and Wi-Fi takes over.
+# USB is preferred because it is faster and needs no camera-side setup.
+transport: auto
+
+# The camera's Wi-Fi MAC address, used to find it on the network. The IP is
+# resolved from the ARP table at run time, so the camera can stay on DHCP with
+# no router reservation. Find it on the camera under
+# MENU > Wi-Fi settings > MAC address. Dashes or colons both work.
+#
+# Leave empty and the Wi-Fi path is skipped entirely, so "auto" behaves
+# exactly like "usb".
+#
+# Wireless transfer uses Canon's CCAPI, which must be activated once over USB —
+# see the "Wi-Fi transfer (CCAPI)" section of README.md before setting this.
+camera_mac: ""
+
+# The port CCAPI listens on. 8080 is the camera default; its menu shows the
+# value as 08080, under Camera Control API > Port No.
+ccapi_port: 8080
+
+# Only needed if you registered an account on the camera under
+# Camera Control API > Account settings. With no account registered, CCAPI is
+# open on your LAN and these stay empty.
+ccapi_user: ""
+ccapi_password: ""

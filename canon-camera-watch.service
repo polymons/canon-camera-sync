@@ -1,0 +1,45 @@
+# Event-driven trigger for the Wi-Fi sync path.
+#
+# Canon bodies with CCAPI enabled announce themselves over SSDP when they join
+# the network, so the sync can start the moment the camera is switched on
+# instead of a timer polling for it. canon-camera-sync-wifi.timer stays enabled
+# as a slow safety net for a missed announcement (multicast is lossy).
+#
+# Install:
+#   sudo install -m755 canon-camera-watch.py /opt/canon-camera-sync/
+#   sudo install -m644 canon-camera-watch.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now canon-camera-watch.service
+
+[Unit]
+Description=Canon Camera SSDP Watch (triggers sync when the camera appears)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/canon-camera-sync/canon-camera-watch.py
+Restart=always
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Runs as root only so it can call `systemctl start` on the sync unit. The
+# socket itself needs no privilege — SSDP is udp/1900, above the reserved range.
+# The process writes nothing, so it can be locked down hard.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Multicast receive needs no capability; drop the lot.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

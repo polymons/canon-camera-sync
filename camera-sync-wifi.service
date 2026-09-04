@@ -1,0 +1,43 @@
+# Canon Camera Auto-Sync — Wi-Fi (CCAPI) variant.
+#
+# Reference template. Unlike the USB unit there is no udev trigger: a camera on
+# the network raises no kernel event, so this is driven by camera-sync-wifi.timer
+# (or run by hand).
+#
+# Deliberately a SEPARATE unit name from canon-camera-sync.service so a stuck USB
+# run can never block the Wi-Fi path, or vice versa.
+#
+# Requires CCAPI activated on the camera and camera_mac set in config.yml.
+
+[Unit]
+Description=Canon Camera Photo Sync (Wi-Fi / CCAPI)
+After=network-online.target
+Wants=network-online.target
+# Do not fire with the photo drive unmounted: the script would otherwise
+# mkdir -p a fake dest_base on the root filesystem and "sync" into it.
+RequiresMountsFor=/media/ecniv/FILES
+
+[Service]
+Type=oneshot
+ExecStart=/opt/canon-camera-sync/camera-sync.sh
+# Tells the script that "no camera" is a normal answer for a polling trigger,
+# so an idle tick exits 0 instead of logging a failed unit every few minutes.
+Environment=CAMERA_SYNC_POLL=1
+
+# Must match camera-sync.service: both units take the same lock, and that
+# only works if both resolve /run/canon-camera-sync to the same directory.
+RuntimeDirectory=canon-camera-sync
+RuntimeDirectoryPreserve=yes
+
+# This unit carries no hardening block. If one is ever added, it must also carry
+# the two lines from camera-sync.service — RuntimeDirectory=canon-camera-sync
+# (or ProtectSystem=strict silently disables the flock) and
+# ReadWritePaths=-/var/lib/node_exporter/textfile_collector (or metrics stop).
+# The USB unit has TimeoutStartUSec=infinity, which is how a dead transfer sat
+# in 'activating' for 56 minutes and swallowed every retrigger. Bound it here:
+# long enough for a full card over 2.4GHz Wi-Fi, short enough to always recover.
+TimeoutStartSec=6h
+# No ExecStartPre sleep: pre_delay_seconds exists to let USB enumeration settle
+# and has no meaning for a network transport.
+StandardOutput=journal
+StandardError=journal

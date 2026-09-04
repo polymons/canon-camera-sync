@@ -1,8 +1,14 @@
 # Canon Camera Auto-Sync
 
-Automatically downloads photos, RAW files, and videos from a Canon camera (or any gphoto2-compatible camera) when connected via USB. Files are organized into `YYYY/MM/` folders by capture date. Only new files are downloaded on each sync — no duplicates, no re-downloads.
+Automatically downloads photos, RAW files, and videos from a Canon camera — over
+**USB** when it is plugged in, or over **Wi-Fi** when it is not. Files are
+organized into `YYYY/MM/` folders by capture date. Only new files are downloaded
+on each sync — no duplicates, no re-downloads.
 
-Originally built for the Canon EOS M50 Mark II, but works with **any camera supported by [gphoto2](http://gphoto2.org/proj/libgphoto2/support.php)** — just update the USB IDs in `config.yml`.
+Originally built for the Canon EOS M50 Mark II. The USB path works with **any
+camera supported by [gphoto2](http://gphoto2.org/proj/libgphoto2/support.php)** —
+just update the USB IDs in `config.yml`. The Wi-Fi path uses Canon's CCAPI and so
+works with [any Canon body that supports it](#wi-fi-transfer-ccapi).
 
 ## How It Works
 
@@ -13,6 +19,11 @@ Originally built for the Canon EOS M50 Mark II, but works with **any camera supp
 5. File ownership is set to your configured user after download
 6. A state file (`.last_sync_count`) tracks what was synced — only new files are fetched
 7. If the SD card was formatted or swapped (file count decreased), a full sync runs automatically
+
+**Over Wi-Fi** the same script instead talks to Canon's CCAPI over HTTP, finding
+the camera on the network by its MAC address. Transport selection is automatic:
+USB wins whenever the camera is plugged in, Wi-Fi is used when it is not. See
+[Wi-Fi transfer (CCAPI)](#wi-fi-transfer-ccapi).
 
 ### Output Folder Structure
 
@@ -37,6 +48,12 @@ Originally built for the Canon EOS M50 Mark II, but works with **any camera supp
 - **Linux** with systemd (Debian/Ubuntu, Fedora, Arch, etc.)
 - **gphoto2** — communicates with the camera over USB
 - USB connection to camera (the camera must be in **PTP mode**, not mass storage)
+
+For the optional Wi-Fi transport, additionally:
+
+- **curl** and **python3** — both are present on most systems already
+- A Canon body that supports **CCAPI**, activated once over USB
+  (see [Wi-Fi transfer (CCAPI)](#wi-fi-transfer-ccapi))
 
 ---
 
@@ -210,6 +227,210 @@ journalctl -u canon-camera-sync.service -f
 
 ---
 
+## Wi-Fi transfer (CCAPI)
+
+When no cable is to hand, the camera can be synced over Wi-Fi using **CCAPI**
+(Canon Camera Control API) — Canon's official HTTP interface for listing and
+downloading what is on the card. The same sync logic, retries and integrity
+checks are used; only the transport differs.
+
+> **You need a Windows or Mac computer and a USB cable once, to activate CCAPI.**
+> Canon ships the activation tool for those two platforms only, and it talks to
+> the camera over USB. After that one-time step everything is wireless, and the
+> sync itself runs fine on Linux.
+
+### Step 1 — Activate CCAPI on the camera (one time)
+
+1. Update the camera to the latest firmware.
+2. Register (free) with Canon's Developer Community for your region and download
+   the **CCAPI Activation Tool**:
+   - Americas — <https://developercommunity.usa.canon.com/>
+   - EMEA / Asia — <https://developers.canon-europe.com/>
+3. Make sure the computer is **connected to the internet** — activation fails
+   offline.
+4. Turn the camera **off**, connect it by USB, then turn it **on**.
+5. Run the Activation Tool and click **Execute Activation**, accept the notice,
+   then quit the tool.
+6. Turn the camera off and unplug it.
+7. Confirm it worked: **MENU → Wi-Fi settings** now lists **[Camera Control API]**.
+
+If that menu entry is missing, CCAPI is not active and nothing below will work.
+
+### Step 2 — Put the camera on your Wi-Fi
+
+Do this with a **fully charged battery** — a large transfer runs for a while —
+and with **no USB cable attached**, since the camera disables Wi-Fi while USB is
+connected.
+
+1. **MENU → Set-up tab → Auto power off: Disable**, and **Eco mode: Off**.
+   Without this the camera sleeps and drops the transfer part-way through.
+2. **MENU → Wi-Fi settings → Camera Control API → Add connection**.
+3. **Add with wizard →** select your network's SSID → enter its password.
+4. **IP address set → Auto setting** (DHCP is fine — the sync finds the camera by
+   MAC address, so it does not care what address it gets).
+5. Note the **Port No.** shown on the Camera Control API screen. The default is
+   `08080`, i.e. port `8080`.
+6. Set **Auto connect → Enable**. The camera then rejoins Wi-Fi by itself every
+   time it is switched on, which is what makes unattended syncing work.
+7. *(Optional)* **Account settings** registers a username and password for HTTP
+   authentication. With no account registered CCAPI is open to anything on your
+   LAN, which is usually fine on a home network.
+
+To reconnect later: **MENU → Wi-Fi settings → Camera Control API → Connect**.
+
+### Step 3 — Point the sync at the camera
+
+Find the camera's Wi-Fi MAC under **MENU → Wi-Fi settings → MAC address**, and
+put it in `config.yml`:
+
+```yaml
+camera_mac: "74:38:B7:E2:73:5F"    # dashes or colons, either is fine
+ccapi_port: 8080                   # only if you changed it on the camera
+ccapi_user: ""                     # only if you registered an account
+ccapi_password: ""
+```
+
+That is the whole configuration. The address is resolved from the ARP table on
+every run, so the camera can stay on DHCP with no router reservation. If the MAC
+is not cached yet, the script sweeps your local subnet once to find it.
+
+**Transport selection is automatic.** USB is preferred whenever the camera is
+plugged in — it is faster and needs no camera-side setup — and Wi-Fi is used
+when it is not. Nothing needs changing when you switch between the two. Set
+`transport` explicitly only to pin one:
+
+| Value | Behaviour |
+|---|---|
+| `auto` | USB if connected, otherwise Wi-Fi (default; also what an absent key means) |
+| `usb` | USB only, never fall back to the network |
+| `ccapi` | Network only, even if the camera is also plugged in |
+
+With no `camera_mac` set, the Wi-Fi path is skipped entirely and `auto` behaves
+exactly like `usb`.
+
+### Step 4 — Check it before a long transfer
+
+With the camera connected (its screen shows **[Wi-Fi on]**):
+
+```bash
+# Does CCAPI answer at all? Lists the API versions the camera supports.
+curl -sS http://<camera-ip>:8080/ccapi
+
+# What would be synced, without downloading anything.
+DRY_RUN=1 sudo /opt/canon-camera-sync/camera-sync.sh
+```
+
+The script prints which transport it chose — `Camera found on USB.` or
+`Camera found on the network at <ip> (CCAPI port 8080).`
+
+### Triggering
+
+There is no udev event for a camera on the network, so the Wi-Fi path is either
+run by hand or driven by a timer:
+
+There is no udev event for a camera on Wi-Fi, but the camera announces itself:
+with CCAPI enabled it broadcasts a UPnP/SSDP `ssdp:alive` message when it joins
+the network. `canon-camera-watch.service` listens for that and starts a sync
+within seconds, so nothing has to poll.
+
+```bash
+sudo install -m755 canon-camera-watch.py     /opt/canon-camera-sync/
+sudo install -m644 canon-camera-watch.service /etc/systemd/system/
+sudo install -m644 camera-sync-wifi.service   /etc/systemd/system/canon-camera-sync-wifi.service
+sudo install -m644 camera-sync-wifi.timer     /etc/systemd/system/canon-camera-sync-wifi.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now canon-camera-watch.service
+sudo systemctl enable --now canon-camera-sync-wifi.timer
+```
+
+The watcher identifies the camera by the MAC embedded in its UPnP UUID, read
+from the same `camera_mac` in `config.yml`, and debounces the burst of
+announcements a camera sends on power-on so one switch-on produces one sync.
+
+The timer is a **safety net**, not the main trigger: it re-checks every 30
+minutes in case an announcement was lost (multicast is not reliable), cannot
+stack runs on top of one in progress, and treats "no camera right now" as
+success rather than a failed unit. Combined with the camera's **Auto connect**,
+switching the camera on is all that is needed for a sync to happen.
+
+Discovery itself is announcement-driven too: the script asks over SSDP first —
+one multicast packet, answered by the camera with its own address — and only
+falls back to the ARP table and a subnet sweep if that goes unanswered.
+
+### How files are filed
+
+Photos are stored under `YYYY/MM/` by **capture date**, read from the image's
+own EXIF `DateTimeOriginal`. If that cannot be read, the script falls back to the
+HTTP `Last-Modified` header and then to the camera's file metadata. A file whose
+date cannot be established from any of those is **discarded and retried on the
+next run**, rather than being filed under the wrong month.
+
+### Limits
+
+- Expect roughly 1–3 MB/s on the camera's 2.4GHz radio, so a large backlog takes
+  a while. It is bounded and resumable: nothing is lost if it is interrupted.
+- Very large video files may be better fetched over USB or a card reader.
+
+## Monitoring (optional)
+
+Every run writes Prometheus metrics to a file, so progress, outcomes and error
+counts can be graphed rather than dug out of the journal:
+
+```
+/var/lib/node_exporter/textfile_collector/canon_camera_sync.prom
+```
+
+If that directory does not exist, or is not writable, **metrics are silently
+skipped and the sync behaves exactly as it would without them**. Nothing here is
+required — the script has no dependency on a monitoring stack.
+
+`install.sh` creates the directory. To put it elsewhere, or to disable metrics
+for one run, set `CANON_SYNC_METRICS_DIR`:
+
+```bash
+sudo CANON_SYNC_METRICS_DIR=/tmp/metrics ./camera-sync.sh   # write there instead
+sudo CANON_SYNC_METRICS_DIR=/nonexistent ./camera-sync.sh   # no metrics at all
+```
+
+`DRY_RUN=1` never writes metrics, so a dry run cannot disturb the numbers.
+
+What is exported: whether a run is in progress and which phase it is in, whether
+the camera was reachable and over which transport, files queued/downloaded/
+failed for the current run, the pending backlog, cumulative download and failure
+counters, run duration, last exit code, and timestamps for the last successful
+sync and the last time the camera was seen. Counters survive across runs because
+the script reads its own previous `.prom` back at startup — which matters when
+most runs are short "no camera" checks that must not reset anything.
+
+To pick these up with node_exporter:
+
+```yaml
+command:
+  - '--collector.textfile.directory=/textfile'
+volumes:
+  - /var/lib/node_exporter/textfile_collector:/textfile:ro
+```
+
+Logs reach Grafana separately, by pointing promtail's `journal` scrape at the
+units (`canon-camera-sync.service`, `canon-camera-sync-wifi.service`,
+`canon-camera-watch.service`). A ready-made Grafana dashboard covering both
+halves lives in the `Containers/monitoring` stack as `canon-camera-sync.json`.
+
+**If the units are hardened**, the metrics path must be declared writable or the
+emitter silently no-ops. `install.sh` already adds both lines; a hand-written
+unit with `ProtectSystem=strict` needs them too:
+
+```ini
+ReadWritePaths=-/var/lib/node_exporter/textfile_collector
+RuntimeDirectory=canon-camera-sync
+```
+
+The leading `-` makes the path optional, so a missing directory is skipped
+rather than preventing the unit from starting. `RuntimeDirectory=` is unrelated
+to metrics but equally necessary: `ProtectSystem=strict` makes all of `/run`
+read-only, which would otherwise disable the script's concurrency lock without
+any visible symptom.
+
 ## Uninstalling
 
 ```bash
@@ -230,6 +451,10 @@ sudo ./uninstall.sh
 | `uninstall.sh` | Uninstaller — removes installed files and reloads system daemons |
 | `99-camera-sync.rules` | Template udev rule (reference; `install.sh` generates the actual installed rule) |
 | `camera-sync.service` | Template systemd service (reference; `install.sh` generates the actual installed service) |
+| `camera-sync-wifi.service` | Systemd service for the Wi-Fi (CCAPI) transport — no udev trigger |
+| `camera-sync-wifi.timer` | Safety-net timer that re-checks the network every 30 min; ship disabled |
+| `canon-camera-watch.py` | SSDP listener — starts a sync when the camera announces itself on the network |
+| `canon-camera-watch.service` | Systemd unit for the listener above |
 
 ---
 
@@ -260,6 +485,36 @@ services:
 ---
 
 ## Troubleshooting
+
+### Wi-Fi: `[Camera Control API]` is missing from the camera menu
+
+CCAPI has not been activated. It is a one-time USB step with Canon's Activation
+Tool — see [Step 1](#step-1--activate-ccapi-on-the-camera-one-time).
+
+### Wi-Fi: the camera is on the network but nothing answers
+
+Check the camera shows **[Wi-Fi on]** for Camera Control API rather than sitting
+in the menu, and that `ccapi_port` matches the **Port No.** on its Camera Control
+API screen. Then try the API directly:
+
+```bash
+curl -sS http://<camera-ip>:8080/ccapi
+```
+
+If the camera cannot be found at all, confirm it is on the same subnet and that
+your router does not have **AP/client isolation** enabled, which blocks
+wired-to-wireless traffic.
+
+### Why not gphoto2 over Wi-Fi (PTP/IP)?
+
+gphoto2 supports PTP/IP, and it works on older Canon bodies, but Canon's
+"Remote control (EOS Utility)" mode on newer ones expects Canon's own EOS Utility
+to announce itself first. Verified on an **EOS M50 Mark II**: TCP port 15740
+opens and the PTP/IP Init Command Request is accepted, then the camera resets the
+connection and reports **Err 11, "connection target not found"** — with every
+available driver. Canon's manual states plainly that the EOS software must be
+running on the computer. CCAPI is the supported route, which is why this project
+uses it.
 
 ### USB Permission Denied
 
